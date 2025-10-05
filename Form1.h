@@ -63,6 +63,9 @@ namespace GroundStation
 		Form1(void)
 		{
 			InitializeComponent();
+			cmc_word_order_code = false;
+			cmc_w0 = 0;
+			cmc_w1 = 0;
 		}
   
 	protected:
@@ -126,6 +129,7 @@ namespace GroundStation
 		int framead;
 		int frame_addr;
 		// CMC datastream parser
+		bool cmc_word_order_code;
 		unsigned int cmc_w0,cmc_w1;
 		unsigned int cmc_upbuff __nogc[20];
 		unsigned int cmc_compnumb;
@@ -154,6 +158,9 @@ namespace GroundStation
 		void end_lbr();
 		void parse_cmc();
 		void setup_cmc_list();
+		void DoCMCLock();
+		void ProcessCMC();
+		void ProcessEMEMDump();
 		char get_dsky_char(unsigned int bits);
 		double unscale_data(unsigned char data,double low,double high);
 		double unscale_data_sq(unsigned char data,double low,double high);

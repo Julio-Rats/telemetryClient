@@ -65,6 +65,16 @@ using namespace GroundStation;
 #define TLM_E	4
 #define TLM_SRC 5
 
+// CMC downlists
+#define TLM_CMC_NONE -1
+#define TLM_CMC_COAST_ALIGN 0
+#define TLM_CMC_ENTRY_UPDATE 1
+#define TLM_CMC_RENDEZVOUS_PRETHRUST 2
+#define TLM_CMC_POWERED 3
+#define TLM_CMC_ORBITAL_NAVIGATION 4
+#define TLM_CMC_SURFACE_ALIGN 5
+#define TLM_CMC_ERASABLE_MEMORY_DUMP 076000 //077777 minus 01777
+
 int APIENTRY _tWinMain(HINSTANCE hInstance,
                      HINSTANCE hPrevInstance,
                      LPTSTR    lpCmdLine,
@@ -1909,13 +1919,13 @@ void Form1::parse_hbr(unsigned char data, int bytect){
 
 	switch(bytect){
 		case 0: // SYNC 1
-			if(data != 05){ end_hbr(); lock_type = 0; cmc_lock_type = 0; }
+			if(data != 05){ end_hbr(); lock_type = 0; cmc_lock_type = TLM_CMC_NONE; }
 			break;
 		case 1: // SYNC 2
-			if(data != 0171){ end_hbr(); lock_type = 0; cmc_lock_type = 0; }
+			if(data != 0171){ end_hbr(); lock_type = 0; cmc_lock_type = TLM_CMC_NONE; }
 			break;
 		case 2: // SYNC 3
-			if(data != 0267){ end_hbr(); lock_type = 0; cmc_lock_type = 0; }
+			if(data != 0267){ end_hbr(); lock_type = 0; cmc_lock_type = TLM_CMC_NONE; }
 			break;
 		case 3: // FRAME COUNT
 			framect = data&077; // 1-50 frame count
@@ -2726,7 +2736,7 @@ void Form1::parse_hbr(unsigned char data, int bytect){
 void Form1::setup_cmc_list(){
 	if(cmc_form == NULL){ return; } // Safeguard
 	bool onoff;
-	if(cmc_lock_type != 0){ onoff = TRUE; }else{ onoff = FALSE; }
+	if(cmc_lock_type != TLM_CMC_NONE){ onoff = TRUE; }else{ onoff = FALSE; }
 
 	cmc_form->cmcListID->Enabled = onoff;
 
@@ -2928,59 +2938,100 @@ void Form1::setup_cmc_list(){
 	cmc_form->textBox179->Enabled = onoff;
 }
 
+void Form1::DoCMCLock()
+{
+	switch (cmc_lock_type)
+	{
+		case TLM_CMC_COAST_ALIGN:  // COAST AND ALIGN 
+			cmc_form->cmcListID->Text = "COAST/ALIGN";
+			setup_cmc_list();
+			break;
+		case TLM_CMC_ENTRY_UPDATE:  // ENTRY AND UPDATE
+			cmc_form->cmcListID->Text = "ENTRY/UPDATE"; 
+			setup_cmc_list();
+			break;
+		case TLM_CMC_RENDEZVOUS_PRETHRUST:  // RDZ AND PRETHRUST
+			cmc_form->cmcListID->Text = "RDZ/PRETHRUST";
+			setup_cmc_list();
+			break;
+		case TLM_CMC_POWERED:  // POWERED LIST
+			cmc_form->cmcListID->Text = "POWERED"; 
+			setup_cmc_list();
+			break;
+		case TLM_CMC_ORBITAL_NAVIGATION:  // ORBITAL NAV
+			cmc_form->cmcListID->Text = "ORBITAL NAV"; 
+			setup_cmc_list();
+			break;
+		case TLM_CMC_ERASABLE_MEMORY_DUMP:
+			cmc_form->cmcListID->Text = "EMEM DUMP";
+			break;
+		default:
+			cmc_lock_type = TLM_CMC_NONE;
+			cmc_form->cmcListID->Text = "NO SYNC"; 
+			break;
+	}
+}
+
 void Form1::parse_cmc(){
-	char msg[256];
 	// All CMC data lists are 200 registers long.
 
 	if(cmc_form == NULL){ return; } // Don't waste time with this if we aren't reading the output.
 
-	if(cmc_lock_type == 0){
-		cmc_frame_addr = 1;   // Hold at one
-		if(cmc_w1 == 077340){ // Check for SYNC 1
-				switch(cmc_w0){   // Switch other halfword
-					case 077777:  // COAST AND ALIGN 
-						cmc_lock_type = 1; 
-						cmc_form->cmcListID->Text = "COAST/ALIGN";
-						setup_cmc_list();
-						break;
-					case 077776:  // ENTRY AND UPDATE
-						cmc_lock_type = 2; 
-						cmc_form->cmcListID->Text = "ENTRY/UPDATE"; 
-						setup_cmc_list();
-						break;
-					case 077775:  // RDZ AND PRETHRUST
-						cmc_lock_type = 3;
-						cmc_form->cmcListID->Text = "RDZ/PRETHRUST";
-						setup_cmc_list();
-						break;
-					case 077774:  // POWERED LIST
-						cmc_lock_type = 4;
-						cmc_form->cmcListID->Text = "POWERED"; 
-						setup_cmc_list();
-						break;
-					case 077773:  // ORBITAL NAV
-						cmc_lock_type = 5;
-						cmc_form->cmcListID->Text = "ORBITAL NAV"; 
-						setup_cmc_list();
-						break;
-					default:
-						cmc_lock_type = 0;
-						cmc_form->cmcListID->Text = "NO SYNC"; 
-						break;
-				}
-			}else{
-				cmc_lock_type = 0;
-				cmc_form->cmcListID->Text = "NO SYNC"; 
-			}
-			return;
-	}else{
-		cmc_frame_addr++;
-		if(cmc_frame_addr > 100){
-			cmc_frame_addr = 1; // LOOP
+	//New list?
+	if (cmc_word_order_code == false && cmc_w1 == 077340)
+	{
+		//Yes
+		//Reset word counter
+		cmc_frame_addr = 0;
+		//Get downlist
+		cmc_lock_type = 077777 - cmc_w0;
+		DoCMCLock();
+	}
+		//No lock?
+	if (cmc_lock_type == TLM_CMC_NONE)
+	{
+		setup_cmc_list();
+		return;
+	}
+	//Handle data
+	if (cmc_lock_type == TLM_CMC_ERASABLE_MEMORY_DUMP)
+	{
+		//Erasable memory dump
+		ProcessEMEMDump();
+	}
+	else
+	{
+		//Normal downlist
+		//Store raw data
+		//cmc_raw_data[lgc_frame_addr][0] = cmc_w0;
+		//cmc_raw_data[lgc_frame_addr][1] = cmc_w1;
+
+		ProcessCMC();
+	}
+	//Increment counter
+	cmc_frame_addr++;
+	//End of list?
+	if (cmc_lock_type == TLM_CMC_ERASABLE_MEMORY_DUMP)
+	{
+		if (cmc_frame_addr >= 130)
+		{
+			cmc_lock_type = TLM_CMC_NONE;
 		}
 	}
-	// ACTUAL DATA PARSING HERE
-	switch(cmc_frame_addr){
+	else
+	{
+		if (cmc_frame_addr >= 100)
+		{
+			cmc_lock_type = TLM_CMC_NONE;
+		}
+	}
+}
+
+void Form1::ProcessCMC()
+{
+	char msg[256];
+
+	switch(cmc_frame_addr + 1){
 		case 1: // SYNC WORDS
 			if(cmc_w1 == 077340){ // Check for SYNC 1
 				switch(cmc_w0){   // Switch other halfword
@@ -4308,6 +4359,11 @@ void Form1::parse_cmc(){
 	}
 }
 
+void Form1::ProcessEMEMDump()
+{
+	//TBD
+}
+
 // Translate bits into DSKY display character
 char Form1::get_dsky_char(unsigned int bits){
 	switch(bits){
@@ -4469,6 +4525,7 @@ void Form1::parse_lbr(unsigned char data, int bytect)
 
 		case 8:
 		case 28: // CMC DATA WORD
+			cmc_word_order_code = ((data & 0200) != 0);
 			cmc_w0 = data&0177;
 			cmc_w0 <<= 8;
 			break;
