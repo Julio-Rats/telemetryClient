@@ -65,6 +65,16 @@ using namespace GroundStation;
 #define TLM_E	4
 #define TLM_SRC 5
 
+// CMC downlists
+#define TLM_CMC_NONE -1
+#define TLM_CMC_COAST_ALIGN 0
+#define TLM_CMC_ENTRY_UPDATE 1
+#define TLM_CMC_RENDEZVOUS_PRETHRUST 2
+#define TLM_CMC_POWERED 3
+#define TLM_CMC_ORBITAL_NAVIGATION 4
+#define TLM_CMC_SURFACE_ALIGN 5
+#define TLM_CMC_ERASABLE_MEMORY_DUMP 076000 //077777 minus 01777
+
 int APIENTRY _tWinMain(HINSTANCE hInstance,
                      HINSTANCE hPrevInstance,
                      LPTSTR    lpCmdLine,
@@ -1909,13 +1919,13 @@ void Form1::parse_hbr(unsigned char data, int bytect){
 
 	switch(bytect){
 		case 0: // SYNC 1
-			if(data != 05){ end_hbr(); lock_type = 0; cmc_lock_type = 0; }
+			if(data != 05){ end_hbr(); lock_type = 0; cmc_lock_type = TLM_CMC_NONE; }
 			break;
 		case 1: // SYNC 2
-			if(data != 0171){ end_hbr(); lock_type = 0; cmc_lock_type = 0; }
+			if(data != 0171){ end_hbr(); lock_type = 0; cmc_lock_type = TLM_CMC_NONE; }
 			break;
 		case 2: // SYNC 3
-			if(data != 0267){ end_hbr(); lock_type = 0; cmc_lock_type = 0; }
+			if(data != 0267){ end_hbr(); lock_type = 0; cmc_lock_type = TLM_CMC_NONE; }
 			break;
 		case 3: // FRAME COUNT
 			framect = data&077; // 1-50 frame count
@@ -2726,7 +2736,7 @@ void Form1::parse_hbr(unsigned char data, int bytect){
 void Form1::setup_cmc_list(){
 	if(cmc_form == NULL){ return; } // Safeguard
 	bool onoff;
-	if(cmc_lock_type != 0){ onoff = TRUE; }else{ onoff = FALSE; }
+	if(cmc_lock_type != TLM_CMC_NONE){ onoff = TRUE; }else{ onoff = FALSE; }
 
 	cmc_form->cmcListID->Enabled = onoff;
 
@@ -2928,97 +2938,100 @@ void Form1::setup_cmc_list(){
 	cmc_form->textBox179->Enabled = onoff;
 }
 
+void Form1::DoCMCLock()
+{
+	switch (cmc_lock_type)
+	{
+		case TLM_CMC_COAST_ALIGN:  // COAST AND ALIGN 
+			cmc_form->cmcListID->Text = "COAST/ALIGN";
+			setup_cmc_list();
+			break;
+		case TLM_CMC_ENTRY_UPDATE:  // ENTRY AND UPDATE
+			cmc_form->cmcListID->Text = "ENTRY/UPDATE"; 
+			setup_cmc_list();
+			break;
+		case TLM_CMC_RENDEZVOUS_PRETHRUST:  // RDZ AND PRETHRUST
+			cmc_form->cmcListID->Text = "RDZ/PRETHRUST";
+			setup_cmc_list();
+			break;
+		case TLM_CMC_POWERED:  // POWERED LIST
+			cmc_form->cmcListID->Text = "POWERED"; 
+			setup_cmc_list();
+			break;
+		case TLM_CMC_ORBITAL_NAVIGATION:  // ORBITAL NAV
+			cmc_form->cmcListID->Text = "ORBITAL NAV"; 
+			setup_cmc_list();
+			break;
+		case TLM_CMC_ERASABLE_MEMORY_DUMP:
+			cmc_form->cmcListID->Text = "EMEM DUMP";
+			break;
+		default:
+			cmc_lock_type = TLM_CMC_NONE;
+			cmc_form->cmcListID->Text = "NO SYNC"; 
+			break;
+	}
+}
+
 void Form1::parse_cmc(){
-	char msg[256];
 	// All CMC data lists are 200 registers long.
 
 	if(cmc_form == NULL){ return; } // Don't waste time with this if we aren't reading the output.
 
-	if(cmc_lock_type == 0){
-		cmc_frame_addr = 1;   // Hold at one
-		if(cmc_w1 == 077340){ // Check for SYNC 1
-				switch(cmc_w0){   // Switch other halfword
-					case 077777:  // COAST AND ALIGN 
-						cmc_lock_type = 1; 
-						cmc_form->cmcListID->Text = "COAST/ALIGN";
-						setup_cmc_list();
-						break;
-					case 077776:  // ENTRY AND UPDATE
-						cmc_lock_type = 2; 
-						cmc_form->cmcListID->Text = "ENTRY/UPDATE"; 
-						setup_cmc_list();
-						break;
-					case 077775:  // RDZ AND PRETHRUST
-						cmc_lock_type = 3;
-						cmc_form->cmcListID->Text = "RDZ/PRETHRUST";
-						setup_cmc_list();
-						break;
-					case 077774:  // POWERED LIST
-						cmc_lock_type = 4;
-						cmc_form->cmcListID->Text = "POWERED"; 
-						setup_cmc_list();
-						break;
-					case 077773:  // ORBITAL NAV
-						cmc_lock_type = 5;
-						cmc_form->cmcListID->Text = "ORBITAL NAV"; 
-						setup_cmc_list();
-						break;
-					default:
-						cmc_lock_type = 0;
-						cmc_form->cmcListID->Text = "NO SYNC"; 
-						break;
-				}
-			}else{
-				cmc_lock_type = 0;
-				cmc_form->cmcListID->Text = "NO SYNC"; 
-			}
-			return;
-	}else{
-		cmc_frame_addr++;
-		if(cmc_frame_addr > 100){
-			cmc_frame_addr = 1; // LOOP
+	//New list?
+	if (cmc_word_order_code == false && cmc_w1 == 077340)
+	{
+		//Yes
+		//Reset word counter
+		cmc_frame_addr = 0;
+		//Get downlist
+		cmc_lock_type = 077777 - cmc_w0;
+		DoCMCLock();
+	}
+		//No lock?
+	if (cmc_lock_type == TLM_CMC_NONE)
+	{
+		setup_cmc_list();
+		return;
+	}
+	//Handle data
+	if (cmc_lock_type == TLM_CMC_ERASABLE_MEMORY_DUMP)
+	{
+		//Erasable memory dump
+		ProcessEMEMDump();
+	}
+	else
+	{
+		//Normal downlist
+		//Store raw data
+		//cmc_raw_data[lgc_frame_addr][0] = cmc_w0;
+		//cmc_raw_data[lgc_frame_addr][1] = cmc_w1;
+
+		ProcessCMC();
+	}
+	//Increment counter
+	cmc_frame_addr++;
+	//End of list?
+	if (cmc_lock_type == TLM_CMC_ERASABLE_MEMORY_DUMP)
+	{
+		if (cmc_frame_addr >= 130)
+		{
+			cmc_lock_type = TLM_CMC_NONE;
 		}
 	}
-	// ACTUAL DATA PARSING HERE
-	switch(cmc_frame_addr){
-		case 1: // SYNC WORDS
-			if(cmc_w1 == 077340){ // Check for SYNC 1
-				switch(cmc_w0){   // Switch other halfword
-					case 077777:  // COAST AND ALIGN 
-						cmc_lock_type = 1; 
-						cmc_form->cmcListID->Text = "COAST/ALIGN"; 
-						setup_cmc_list();
-						break;
-					case 077776:  // ENTRY AND UPDATE
-						cmc_lock_type = 2; 
-						cmc_form->cmcListID->Text = "ENTRY/UPDATE"; 
-						setup_cmc_list();
-						break;
-					case 077775:  // RDZ AND PRETHRUST
-						cmc_lock_type = 3;
-						cmc_form->cmcListID->Text = "RDZ/PRETHRUST"; 
-						setup_cmc_list();
-						break;
-					case 077774:  // POWERED LIST
-						cmc_lock_type = 4;
-						cmc_form->cmcListID->Text = "POWERED"; 
-						setup_cmc_list();
-						break;
-					case 077773:  // ORBITAL NAV
-						cmc_lock_type = 5;
-						cmc_form->cmcListID->Text = "ORBITAL NAV"; 
-						setup_cmc_list();
-						break;
-					default:
-						cmc_lock_type = 0;
-						cmc_form->cmcListID->Text = "NO SYNC"; 
-						break;
-				}
-			}else{
-				cmc_lock_type = 0;
-				cmc_form->cmcListID->Text = "NO SYNC";
-			}
-			break;
+	else
+	{
+		if (cmc_frame_addr >= 100)
+		{
+			cmc_lock_type = TLM_CMC_NONE;
+		}
+	}
+}
+
+void Form1::ProcessCMC()
+{
+	char msg[256];
+
+	switch(cmc_frame_addr + 1){
 		// CSM STATE VECTOR
 		case 2: 
 			sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox1->Text = msg; break;
@@ -3073,14 +3086,14 @@ void Form1::parse_cmc(){
 		// CMDAPMOD and PREL (LIST 5)
 		case 18:
 			switch(cmc_lock_type){
-				case 1:
-				case 3:
-				case 4:
+				case TLM_CMC_COAST_ALIGN:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
+				case TLM_CMC_POWERED:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox24->Text = msg;
 					cmc_form->textBox160->Text = "XXXXX";
 					cmc_form->textBox163->Text = "XXXXX";
 					break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					sprintf(msg,"%05o",cmc_w0); cmc_form->textBox160->Text = msg;
 					sprintf(msg,"%05o",cmc_w1); cmc_form->textBox163->Text = msg;
 					cmc_form->textBox24->Text = "XXXXX-XXXXX";
@@ -3092,22 +3105,22 @@ void Form1::parse_cmc(){
 		// QREL and RREL   (LIST 5)
 		case 19:
 			switch(cmc_lock_type){
-				case 1:
+				case TLM_CMC_COAST_ALIGN:
 					sprintf(msg,"%05o",cmc_w0); cmc_form->textBox26->Text = msg;
 					sprintf(msg,"%05o",cmc_w1); cmc_form->textBox25->Text = msg;
 					cmc_form->textBox65->Text = "XXXXX-XXXXX";
 					cmc_form->textBox162->Text = "XXXXX";
 					cmc_form->textBox161->Text = "XXXXX";
 					break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					sprintf(msg,"%05o",cmc_w0); cmc_form->textBox162->Text = msg;
 					sprintf(msg,"%05o",cmc_w1); cmc_form->textBox161->Text = msg;
 					cmc_form->textBox65->Text = "XXXXX-XXXXX";
 					cmc_form->textBox26->Text = "XXXXX";
 					cmc_form->textBox25->Text = "XXXXX";
 					break;
-				case 3:
-				case 4:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
+				case TLM_CMC_POWERED:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox65->Text = msg; 
 					cmc_form->textBox26->Text = "XXXXX";
 					cmc_form->textBox25->Text = "XXXXX";
@@ -3122,19 +3135,19 @@ void Form1::parse_cmc(){
 		// LD1                    (LIST 5)
 		case 20:
 			switch(cmc_lock_type){
-				case 1:
+				case TLM_CMC_COAST_ALIGN:
 					sprintf(msg,"%05o",cmc_w0); cmc_form->textBox27->Text = msg;
 					sprintf(msg,"%05o",cmc_w1); cmc_form->textBox28->Text = msg;
 					cmc_form->textBox132->Text = "XXXXX-XXXXX";
 					break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox164->Text = msg; 
 					cmc_form->textBox132->Text = "XXXXX-XXXXX";
 					cmc_form->textBox27->Text = "XXXXX";
 					cmc_form->textBox28->Text = "XXXXX";
 					break;
-				case 3: 
-				case 4:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST: 
+				case TLM_CMC_POWERED:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox132->Text = msg; 
 					break;
 			}
@@ -3142,62 +3155,62 @@ void Form1::parse_cmc(){
 		/* ****************** LIST 5 UPBUFF START ******************* */
 		case 21:
 			switch(cmc_lock_type){
-				case 1:
+				case TLM_CMC_COAST_ALIGN:
 					sprintf(msg,"%05o",cmc_w0); cmc_form->textBox31->Text = msg;
 					sprintf(msg,"%05o",cmc_w1); cmc_form->textBox30->Text = msg;
 					cmc_form->textBox131->Text = "XXXXX-XXXXX";
 					break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					cmc_form->textBox30->Text = "XXXXX";
 					cmc_form->textBox31->Text = "XXXXX";
 					cmc_form->textBox131->Text = "XXXXX-XXXXX";
 					cmc_upbuff[0] = cmc_w0; cmc_upbuff[1] = cmc_w1;
 					break;
-				case 3:
-				case 4:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
+				case TLM_CMC_POWERED:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox131->Text = msg; 
 					break;
 			}
 			break;
 		case 22:
 			switch(cmc_lock_type){
-				case 1:
+				case TLM_CMC_COAST_ALIGN:
 					sprintf(msg,"%05o",cmc_w0); cmc_form->textBox33->Text = msg;
 					sprintf(msg,"%05o",cmc_w1); cmc_form->textBox29->Text = msg;
 					cmc_form->textBox130->Text = "XXXXX-XXXXX";
 					break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					cmc_form->textBox33->Text = "XXXXX";
 					cmc_form->textBox29->Text = "XXXXX";
 					cmc_form->textBox130->Text = "XXXXX-XXXXX";
 					cmc_upbuff[2] = cmc_w0; cmc_upbuff[3] = cmc_w1;
 					break;
-				case 3:
-				case 4:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
+				case TLM_CMC_POWERED:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox130->Text = msg; 
 					break;
 			}
 			break;
 		case 23:
 			switch(cmc_lock_type){
-				case 1:
+				case TLM_CMC_COAST_ALIGN:
 					sprintf(msg,"%05o",cmc_w0); cmc_form->textBox32->Text = msg;
 					sprintf(msg,"%05o",cmc_w1); cmc_form->textBox34->Text = msg;
 					cmc_form->textBox66->Text = "XXXXX-XXXXX";
 					cmc_form->textBox152->Text = "XXXXX-XXXXX";
 					break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					cmc_form->textBox32->Text = "XXXXX";
 					cmc_form->textBox34->Text = "XXXXX";
 					cmc_form->textBox152->Text = "XXXXX-XXXXX";
 					cmc_form->textBox66->Text = "XXXXX-XXXXX";
 					cmc_upbuff[4] = cmc_w0; cmc_upbuff[5] = cmc_w1;
 					break;
-				case 3: 
+				case TLM_CMC_RENDEZVOUS_PRETHRUST: 
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox66->Text = msg; 
 					cmc_form->textBox152->Text = "XXXXX-XXXXX";
 					break;
-				case 4:
+				case TLM_CMC_POWERED:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox152->Text = msg; 
 					cmc_form->textBox66->Text = "XXXXX-XXXXX";
 					break;
@@ -3208,12 +3221,12 @@ void Form1::parse_cmc(){
 		// PIPTIME and DELVx/y/z (LIST 3)
 		case 24:
 			switch(cmc_lock_type){
-				case 1:
+				case TLM_CMC_COAST_ALIGN:
 					sprintf(msg,"%05o",cmc_w0); cmc_form->textBox36->Text = msg;
 					sprintf(msg,"%05o",cmc_w1); cmc_form->textBox35->Text = msg;
 					cmc_form->textBox153->Text = "XXXXX-XXXXX";
 					break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					cmc_form->textBox36->Text = "XXXXX";
 					cmc_form->textBox35->Text = "XXXXX";
 					cmc_form->textBox27->Text = "XXXXX";
@@ -3221,14 +3234,14 @@ void Form1::parse_cmc(){
 					//cmc_form->textBox153->Text = "XXXXX-XXXXX";
 					cmc_upbuff[6] = cmc_w0; cmc_upbuff[7] = cmc_w1;
 					break;
-				case 3:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
 					sprintf(msg,"%05o",cmc_w0); cmc_form->textBox27->Text = msg;
 					sprintf(msg,"%05o",cmc_w1); cmc_form->textBox28->Text = msg;
 					cmc_form->textBox36->Text = "XXXXX";
 					cmc_form->textBox35->Text = "XXXXX";
 					cmc_form->textBox153->Text = "XXXXX-XXXXX";
 					break;
-				case 4:
+				case TLM_CMC_POWERED:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox153->Text = msg; 
 					cmc_form->textBox36->Text = "XXXXX";
 					cmc_form->textBox35->Text = "XXXXX";					
@@ -3239,11 +3252,11 @@ void Form1::parse_cmc(){
 			break;
 		case 25:
 			switch(cmc_lock_type){
-				case 1:
+				case TLM_CMC_COAST_ALIGN:
 					sprintf(msg,"%05o",cmc_w0); cmc_form->textBox39->Text = msg;
 					sprintf(msg,"%05o",cmc_w1); cmc_form->textBox41->Text = msg;
 					break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					cmc_form->textBox39->Text = "XXXXX";
 					cmc_form->textBox41->Text = "XXXXX";
 					cmc_form->textBox31->Text = "XXXXX";
@@ -3251,13 +3264,13 @@ void Form1::parse_cmc(){
 					cmc_form->textBox138->Text = "XXXXX-XXXXX";
 					cmc_upbuff[8] = cmc_w0; cmc_upbuff[9] = cmc_w1;
 					break;
-				case 3:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
 					sprintf(msg,"%05o",cmc_w0); cmc_form->textBox31->Text = msg;
 					sprintf(msg,"%05o",cmc_w1); cmc_form->textBox30->Text = msg;
 					cmc_form->textBox39->Text = "XXXXX";
 					cmc_form->textBox41->Text = "XXXXX";
 					break;
-				case 4:
+				case TLM_CMC_POWERED:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox138->Text = msg; 
 					cmc_form->textBox39->Text = "XXXXX";
 					cmc_form->textBox41->Text = "XXXXX";					
@@ -3268,11 +3281,11 @@ void Form1::parse_cmc(){
 			break;
 		case 26:
 			switch(cmc_lock_type){
-				case 1:
+				case TLM_CMC_COAST_ALIGN:
 					sprintf(msg,"%05o",cmc_w0); cmc_form->textBox37->Text = msg;
 					sprintf(msg,"%05o",cmc_w1); cmc_form->textBox40->Text = msg;
 					break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					cmc_form->textBox37->Text = "XXXXX";
 					cmc_form->textBox40->Text = "XXXXX";
 					cmc_form->textBox33->Text = "XXXXX";
@@ -3280,13 +3293,13 @@ void Form1::parse_cmc(){
 					cmc_form->textBox76->Text = "XXXXX-XXXXX";
 					cmc_upbuff[10] = cmc_w0; cmc_upbuff[11] = cmc_w1;
 					break;
-				case 3:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
 					sprintf(msg,"%05o",cmc_w0); cmc_form->textBox33->Text = msg;
 					sprintf(msg,"%05o",cmc_w1); cmc_form->textBox29->Text = msg;
 					cmc_form->textBox37->Text = "XXXXX";
 					cmc_form->textBox40->Text = "XXXXX";
 					break;
-				case 4:
+				case TLM_CMC_POWERED:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox76->Text = msg; 
 					cmc_form->textBox37->Text = "XXXXX";
 					cmc_form->textBox40->Text = "XXXXX";					
@@ -3297,12 +3310,12 @@ void Form1::parse_cmc(){
 			break;
 		case 27:
 			switch(cmc_lock_type){
-				case 1:
+				case TLM_CMC_COAST_ALIGN:
 					sprintf(msg,"%05o",cmc_w0); cmc_form->textBox38->Text = msg;
 					sprintf(msg,"%05o",cmc_w1); cmc_form->textBox42->Text = msg;
 					cmc_form->textBox67->Text = "XXXXX";
 					break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					cmc_form->textBox38->Text = "XXXXX";
 					cmc_form->textBox42->Text = "XXXXX";
 					cmc_form->textBox32->Text = "XXXXX";
@@ -3310,13 +3323,13 @@ void Form1::parse_cmc(){
 					cmc_form->textBox75->Text = "XXXXX-XXXXX";
 					cmc_upbuff[12] = cmc_w0; cmc_upbuff[13] = cmc_w1;
 					break;
-				case 3:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
 					sprintf(msg,"%05o",cmc_w0); cmc_form->textBox32->Text = msg;
 					sprintf(msg,"%05o",cmc_w1); cmc_form->textBox67->Text = msg;
 					cmc_form->textBox38->Text = "XXXXX";
 					cmc_form->textBox42->Text = "XXXXX";
 					break;
-				case 4:
+				case TLM_CMC_POWERED:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox75->Text = msg; 
 					cmc_form->textBox38->Text = "XXXXX";
 					cmc_form->textBox42->Text = "XXXXX";					
@@ -3330,14 +3343,14 @@ void Form1::parse_cmc(){
 		// PACTOFF,YACTOFF,PCMD,YCMD (LIST 3)
 		case 28:
 			switch(cmc_lock_type){
-				case 1:
+				case TLM_CMC_COAST_ALIGN:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox44->Text = msg;
 					cmc_form->textBox70->Text = "XXXXX";
 					cmc_form->textBox69->Text = "XXXXX";
 					cmc_form->textBox156->Text = "XXXXX";
 					cmc_form->textBox155->Text = "XXXXX";
 					break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					cmc_form->textBox70->Text = "XXXXX";
 					cmc_form->textBox69->Text = "XXXXX";
 					cmc_form->textBox156->Text = "XXXXX";
@@ -3345,14 +3358,14 @@ void Form1::parse_cmc(){
 					cmc_form->textBox44->Text = "XXXXX-XXXXX";
 					cmc_upbuff[14] = cmc_w0; cmc_upbuff[15] = cmc_w1;
 					break;
-				case 3:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
 					sprintf(msg,"%05o",cmc_w0); cmc_form->textBox70->Text = msg;
 					sprintf(msg,"%05o",cmc_w1); cmc_form->textBox69->Text = msg;
 					cmc_form->textBox44->Text = "XXXXX-XXXXX";
 					cmc_form->textBox156->Text = "XXXXX";
 					cmc_form->textBox155->Text = "XXXXX";
 					break;
-				case 4:
+				case TLM_CMC_POWERED:
 					sprintf(msg,"%05o",cmc_w0); cmc_form->textBox156->Text = msg;
 					sprintf(msg,"%05o",cmc_w1); cmc_form->textBox155->Text = msg;
 					cmc_form->textBox44->Text = "XXXXX-XXXXX";
@@ -3363,26 +3376,26 @@ void Form1::parse_cmc(){
 			break;
 		case 29:
 			switch(cmc_lock_type){
-				case 1:
+				case TLM_CMC_COAST_ALIGN:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox43->Text = msg;
 					cmc_form->textBox68->Text = "XXXXX-XXXXX";
 					cmc_form->textBox154->Text = "XXXXX";
 					cmc_form->textBox157->Text = "XXXXX";
 					break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					cmc_form->textBox154->Text = "XXXXX";
 					cmc_form->textBox157->Text = "XXXXX";
 					cmc_form->textBox43->Text = "XXXXX-XXXXX";
 					cmc_form->textBox68->Text = "XXXXX-XXXXX";
 					cmc_upbuff[16] = cmc_w0; cmc_upbuff[17] = cmc_w1;
 					break;
-				case 3:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox68->Text = msg;
 					cmc_form->textBox43->Text = "XXXXX-XXXXX";
 					cmc_form->textBox154->Text = "XXXXX";
 					cmc_form->textBox157->Text = "XXXXX";
 					break;
-				case 4:
+				case TLM_CMC_POWERED:
 					sprintf(msg,"%05o",cmc_w0); cmc_form->textBox154->Text = msg;
 					sprintf(msg,"%05o",cmc_w1); cmc_form->textBox157->Text = msg;
 					cmc_form->textBox43->Text = "XXXXX-XXXXX";
@@ -3396,14 +3409,14 @@ void Form1::parse_cmc(){
 		/* ****************** LIST 5 UPBUFF ENDS ******************** */
 		case 30:
 			switch(cmc_lock_type){
-				case 1:
+				case TLM_CMC_COAST_ALIGN:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox45->Text = msg;
 					cmc_form->textBox71->Text = "XXXXX";
 					cmc_form->textBox72->Text = "XXXXX";
 					cmc_form->textBox159->Text = "XXXXX";
 					cmc_form->textBox158->Text = "XXXXX";
 					break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					cmc_form->textBox71->Text = "XXXXX";
 					cmc_form->textBox72->Text = "XXXXX";
 					cmc_form->textBox159->Text = "XXXXX";
@@ -3411,14 +3424,14 @@ void Form1::parse_cmc(){
 					cmc_form->textBox45->Text = "XXXXX-XXXXX";
 					cmc_upbuff[18] = cmc_w0; cmc_upbuff[19] = cmc_w1;
 					break;
-				case 3:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
 					sprintf(msg,"%05o",cmc_w0); cmc_form->textBox71->Text = msg;
 					sprintf(msg,"%05o",cmc_w1); cmc_form->textBox72->Text = msg;
 					cmc_form->textBox45->Text = "XXXXX-XXXXX";
 					cmc_form->textBox159->Text = "XXXXX";
 					cmc_form->textBox158->Text = "XXXXX";
 					break;
-				case 4:
+				case TLM_CMC_POWERED:
 					sprintf(msg,"%05o",cmc_w0); cmc_form->textBox159->Text = msg;
 					sprintf(msg,"%05o",cmc_w1); cmc_form->textBox158->Text = msg;
 					cmc_form->textBox45->Text = "XXXXX-XXXXX";
@@ -3433,19 +3446,19 @@ void Form1::parse_cmc(){
 		// COMPNUMB,UPOLDMOD  (LIST 5)
 		case 31:
 			switch(cmc_lock_type){
-				case 1:
+				case TLM_CMC_COAST_ALIGN:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox48->Text = msg;
 					cmc_form->textBox73->Text = "XXXXX-XXXXX";
 					break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					cmc_form->textBox73->Text = "XXXXX-XXXXX";
 					cmc_compnumb = cmc_w0; cmc_upoldmod = cmc_w1;
 					break;
-				case 3:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox73->Text = msg;
 					cmc_form->textBox48->Text = "XXXXX-XXXXX";
 					break;
-				case 4:
+				case TLM_CMC_POWERED:
 					cmc_form->textBox73->Text = "XXXXX-XXXXX";					
 					break;
 			}
@@ -3453,17 +3466,17 @@ void Form1::parse_cmc(){
 		// UPVERB,UPCOUNT     (LIST 5)
 		case 32:
 			switch(cmc_lock_type){
-				case 1:
+				case TLM_CMC_COAST_ALIGN:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox47->Text = msg;
 					break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					cmc_form->textBox47->Text = "XXXXX-XXXXX";
 					cmc_upverb = cmc_w0; cmc_upcount = cmc_w1;
 					break;
-				case 3:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
 					cmc_form->textBox47->Text = "XXXXX-XXXXX";
 					break;
-				case 4:
+				case TLM_CMC_POWERED:
 					break;
 			}
 			// Kick uplink processor
@@ -3472,22 +3485,22 @@ void Form1::parse_cmc(){
 		// PAXERRI,ROLLTM     (LIST 5)
 		case 33:
 			switch(cmc_lock_type){
-				case 1:
+				case TLM_CMC_COAST_ALIGN:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox46->Text = msg;
 					cmc_form->textBox165->Text = "XXXXX";
 					cmc_form->textBox166->Text = "XXXXX";
 					break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					sprintf(msg,"%05o",cmc_w0); cmc_form->textBox166->Text = msg;
 					sprintf(msg,"%05o",cmc_w1); cmc_form->textBox165->Text = msg;
 					cmc_form->textBox46->Text = "XXXXX-XXXXX";
 					break;
-				case 3:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
 					cmc_form->textBox46->Text = "XXXXX-XXXXX";
 					cmc_form->textBox166->Text = "XXXXX";
 					cmc_form->textBox165->Text = "XXXXX";
 					break;
-				case 4:
+				case TLM_CMC_POWERED:
 					break;
 			}
 			break;
@@ -3496,22 +3509,22 @@ void Form1::parse_cmc(){
 		// LATANG                              (LIST 5)
 		case 34:
 			switch(cmc_lock_type){
-				case 1:
+				case TLM_CMC_COAST_ALIGN:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox49->Text = msg;
 					cmc_form->textBox74->Text = "XXXXX-XXXXX";
 					cmc_form->textBox169->Text = "XXXXX-XXXXX";
 					break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox169->Text = msg;
 					cmc_form->textBox74->Text = "XXXXX-XXXXX";
 					cmc_form->textBox49->Text = "XXXXX-XXXXX";
 					break;
-				case 3:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox74->Text = msg;
 					cmc_form->textBox169->Text = "XXXXX-XXXXX";
 					cmc_form->textBox49->Text = "XXXXX-XXXXX";
 					break;
-				case 4:
+				case TLM_CMC_POWERED:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox49->Text = msg;
 					break;
 			}
@@ -3520,22 +3533,22 @@ void Form1::parse_cmc(){
 		// RDOT                                (LIST 5)
 		case 35:
 			switch(cmc_lock_type){
-				case 1:
+				case TLM_CMC_COAST_ALIGN:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox50->Text = msg;
 					cmc_form->textBox138->Text = "XXXXX-XXXXX";
 					cmc_form->textBox168->Text = "XXXXX-XXXXX";
 					break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox168->Text = msg;
 					cmc_form->textBox50->Text = "XXXXX-XXXXX";
 					cmc_form->textBox138->Text = "XXXXX-XXXXX";
 					break;
-				case 3:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox138->Text = msg;
 					cmc_form->textBox50->Text = "XXXXX-XXXXX";
 					cmc_form->textBox168->Text = "XXXXX-XXXXX";
 					break;
-				case 4:
+				case TLM_CMC_POWERED:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox50->Text = msg;
 					cmc_form->textBox168->Text = "XXXXX-XXXXX";
 					break;
@@ -3545,22 +3558,22 @@ void Form1::parse_cmc(){
 		// THETAH           (LIST 5)
 		case 36:
 			switch(cmc_lock_type){
-				case 1:
+				case TLM_CMC_COAST_ALIGN:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox51->Text = msg;
 					cmc_form->textBox76->Text = "XXXXX-XXXXX";
 					cmc_form->textBox167->Text = "XXXXX-XXXXX";
 					break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox167->Text = msg;
 					cmc_form->textBox76->Text = "XXXXX-XXXXX";
 					cmc_form->textBox51->Text = "XXXXX-XXXXX";
 					break;
-				case 3:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox76->Text = msg;
 					cmc_form->textBox51->Text = "XXXXX-XXXXX";
 					cmc_form->textBox167->Text = "XXXXX-XXXXX";
 					break;
-				case 4:
+				case TLM_CMC_POWERED:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox51->Text = msg;
 					cmc_form->textBox167->Text = "XXXXX-XXXXX";
 					break;
@@ -3570,20 +3583,20 @@ void Form1::parse_cmc(){
 		// LATSPL (LIST 5)
 		case 37:
 			switch(cmc_lock_type){
-				case 1:
+				case TLM_CMC_COAST_ALIGN:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox52->Text = msg;
 					cmc_form->textBox75->Text = "XXXXX-XXXXX";
 					break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox148->Text = msg;
 					cmc_form->textBox75->Text = "XXXXX-XXXXX";
 					cmc_form->textBox52->Text = "XXXXX-XXXXX";
 					break;
-				case 3:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox75->Text = msg;
 					cmc_form->textBox52->Text = "XXXXX-XXXXX";
 					break;
-				case 4:
+				case TLM_CMC_POWERED:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox52->Text = msg;
 					break;
 			}
@@ -3592,20 +3605,20 @@ void Form1::parse_cmc(){
 		// LNGSPL (LIST 5)
 		case 38:
 			switch(cmc_lock_type){
-				case 1:
+				case TLM_CMC_COAST_ALIGN:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox53->Text = msg;
 					cmc_form->textBox140->Text = "XXXXX-XXXXX";
 					break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox149->Text = msg;
 					cmc_form->textBox53->Text = "XXXXX-XXXXX";
 					cmc_form->textBox140->Text = "XXXXX-XXXXX";
 					break;
-				case 3:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox140->Text = msg;
 					cmc_form->textBox53->Text = "XXXXX-XXXXX";
 					break;
-				case 4:
+				case TLM_CMC_POWERED:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox53->Text = msg;
 					break;
 			}
@@ -3614,25 +3627,25 @@ void Form1::parse_cmc(){
 		// ALFA/180,BETA/180 (LIST 5)
 		case 39:
 			switch(cmc_lock_type){
-				case 1:
+				case TLM_CMC_COAST_ALIGN:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox54->Text = msg;
 					cmc_form->textBox139->Text = "XXXXX-XXXXX";
 					cmc_form->textBox170->Text = "XXXXX";
 					cmc_form->textBox171->Text = "XXXXX";
 					break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					sprintf(msg,"%05o",cmc_w0); cmc_form->textBox171->Text = msg;
 					sprintf(msg,"%05o",cmc_w1); cmc_form->textBox170->Text = msg;
 					cmc_form->textBox139->Text = "XXXXX-XXXXX";
 					cmc_form->textBox54->Text = "XXXXX-XXXXX";
 					break;
-				case 3:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox139->Text = msg;
 					cmc_form->textBox54->Text = "XXXXX-XXXXX";
 					cmc_form->textBox170->Text = "XXXXX";
 					cmc_form->textBox171->Text = "XXXXX";
 					break;
-				case 4:
+				case TLM_CMC_POWERED:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox54->Text = msg;
 					cmc_form->textBox170->Text = "XXXXX";
 					cmc_form->textBox171->Text = "XXXXX";
@@ -3790,12 +3803,12 @@ void Form1::parse_cmc(){
 		// PIPTIME            (LIST 5)
 		case 52: 
 			switch(cmc_lock_type){
-				case 1:
-				case 3:
-				case 4:
+				case TLM_CMC_COAST_ALIGN:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
+				case TLM_CMC_POWERED:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox79->Text = msg;					
 					break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox153->Text = msg;
 					cmc_form->textBox79->Text = "XXXXX-XXXXX";
 					break;
@@ -3805,13 +3818,13 @@ void Form1::parse_cmc(){
 		// DELVx (LIST 5)
 		case 53:
 			switch(cmc_lock_type){
-				case 1:
-				case 3:
-				case 4:
+				case TLM_CMC_COAST_ALIGN:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
+				case TLM_CMC_POWERED:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox80->Text = msg;
 					cmc_form->textBox174->Text = "XXXXX-XXXXX";
 					break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox174->Text = msg;
 					cmc_form->textBox80->Text = "XXXXX-XXXXX";
 					break;
@@ -3821,13 +3834,13 @@ void Form1::parse_cmc(){
 		// DELVy (LIST 5)
 		case 54:
 			switch(cmc_lock_type){
-				case 1:
-				case 3:
-				case 4:
+				case TLM_CMC_COAST_ALIGN:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
+				case TLM_CMC_POWERED:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox81->Text = msg;
 					cmc_form->textBox173->Text = "XXXXX-XXXXX";
 					break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox173->Text = msg;
 					cmc_form->textBox81->Text = "XXXXX-XXXXX";
 					break;
@@ -3837,13 +3850,13 @@ void Form1::parse_cmc(){
 		// DELVz (LIST 5)
 		case 55:
 			switch(cmc_lock_type){
-				case 1:
-				case 3:
-				case 4:
+				case TLM_CMC_COAST_ALIGN:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
+				case TLM_CMC_POWERED:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox82->Text = msg;
 					cmc_form->textBox172->Text = "XXXXX-XXXXX";
 					break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox172->Text = msg; break;
 					cmc_form->textBox82->Text = "XXXXX-XXXXX";
 					break;
@@ -3853,13 +3866,13 @@ void Form1::parse_cmc(){
 		// TTE   (LIST 5)
 		case 56:
 			switch(cmc_lock_type){
-				case 1:
-				case 3:
-				case 4:
+				case TLM_CMC_COAST_ALIGN:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
+				case TLM_CMC_POWERED:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox83->Text = msg;
 					cmc_form->textBox175->Text = "XXXXX-XXXXX";
 					break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox175->Text = msg;
 					cmc_form->textBox83->Text = "XXXXX-XXXXX";
 					break;
@@ -3869,13 +3882,13 @@ void Form1::parse_cmc(){
 		// VIO   (LIST 5)
 		case 57:
 			switch(cmc_lock_type){
-				case 1:
-				case 3:
-				case 4:
+				case TLM_CMC_COAST_ALIGN:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
+				case TLM_CMC_POWERED:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox84->Text = msg; 
 					cmc_form->textBox176->Text = "XXXXX-XXXXX";
 					break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox176->Text = msg;
 					cmc_form->textBox84->Text = "XXXXX-XXXXX";
 					break;
@@ -3885,13 +3898,13 @@ void Form1::parse_cmc(){
 		// VPRED (LIST 5)
 		case 58:
 			switch(cmc_lock_type){
-				case 1:
-				case 3:
-				case 4:
+				case TLM_CMC_COAST_ALIGN:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
+				case TLM_CMC_POWERED:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox85->Text = msg; 
 					cmc_form->textBox177->Text = "XXXXX-XXXXX";
 					break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox177->Text = msg;
 					cmc_form->textBox85->Text = "XXXXX-XXXXX";
 					break;
@@ -3911,11 +3924,11 @@ void Form1::parse_cmc(){
 		// ERRORx/y/z and DUPE OF THETADx   (LIST 5)
 		case 66:
 			switch(cmc_lock_type){
-				case 1:
-				case 3:
-				case 4:
+				case TLM_CMC_COAST_ALIGN:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
+				case TLM_CMC_POWERED:
 					break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					sprintf(msg,"%05o",cmc_w0); cmc_form->textBox111->Text = msg;
 					sprintf(msg,"%05o",cmc_w1); cmc_form->textBox110->Text = msg;
 					break;
@@ -3923,11 +3936,11 @@ void Form1::parse_cmc(){
 			break;
 		case 67:
 			switch(cmc_lock_type){
-				case 1:
-				case 3:
-				case 4:
+				case TLM_CMC_COAST_ALIGN:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
+				case TLM_CMC_POWERED:
 					break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					sprintf(msg,"%05o",cmc_w0); cmc_form->textBox109->Text = msg;
 					// sprintf(msg,"%05o",cmc_w1); cmc_form->textBox110->Text = msg;
 					break;
@@ -3937,11 +3950,11 @@ void Form1::parse_cmc(){
 		// DUPES OF THETADy/z (LIST 5)
 		case 68:
 			switch(cmc_lock_type){
-				case 1:
-				case 3:
-				case 4:
+				case TLM_CMC_COAST_ALIGN:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
+				case TLM_CMC_POWERED:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox86->Text = msg; break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					break;
 			}
 			break;
@@ -3949,11 +3962,11 @@ void Form1::parse_cmc(){
 		// DUPES OF CMDAPMOD and PREL    (LIST 5)
 		case 69: 
 			switch(cmc_lock_type){
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					break;
-				case 1:
-				case 3:
-				case 4:
+				case TLM_CMC_COAST_ALIGN:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
+				case TLM_CMC_POWERED:
 					sprintf(msg,"%05o",cmc_w0); cmc_form->textBox90->Text = msg;
 					sprintf(msg,"%05o",cmc_w1); cmc_form->textBox89->Text = msg;
 					break;
@@ -3962,11 +3975,11 @@ void Form1::parse_cmc(){
 		// DUPES OF QREL,RREL (LIST 5)
 		case 70: 
 			switch(cmc_lock_type){
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					break;
-				case 1:
-				case 3:
-				case 4:
+				case TLM_CMC_COAST_ALIGN:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
+				case TLM_CMC_POWERED:
 					sprintf(msg,"%05o",cmc_w0); cmc_form->textBox88->Text = msg;
 					sprintf(msg,"%05o",cmc_w1); cmc_form->textBox99->Text = msg;
 					break;
@@ -3975,11 +3988,11 @@ void Form1::parse_cmc(){
 		/* ****************** LIST 5 UPBUF DUPE STARTS ************** */
 		case 71: 
 			switch(cmc_lock_type){
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					break;
-				case 1:
-				case 3:
-				case 4:
+				case TLM_CMC_COAST_ALIGN:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
+				case TLM_CMC_POWERED:
 					sprintf(msg,"%05o",cmc_w0); cmc_form->textBox98->Text = msg;
 					sprintf(msg,"%05o",cmc_w1); cmc_form->textBox97->Text = msg;
 					break;
@@ -3988,11 +4001,11 @@ void Form1::parse_cmc(){
 		// CDUS and PIPAx/y/z
 		case 72:
 			switch(cmc_lock_type){
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					break;
-				case 1:
-				case 3:
-				case 4:
+				case TLM_CMC_COAST_ALIGN:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
+				case TLM_CMC_POWERED:
 					sprintf(msg,"%05o",cmc_w0); cmc_form->textBox12->Text = msg;
 					sprintf(msg,"%05o",cmc_w1); cmc_form->textBox92->Text = msg;
 					break;
@@ -4000,11 +4013,11 @@ void Form1::parse_cmc(){
 			break;
 		case 73: 
 			switch(cmc_lock_type){
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					break;
-				case 1:
-				case 3:
-				case 4:
+				case TLM_CMC_COAST_ALIGN:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
+				case TLM_CMC_POWERED:
 					sprintf(msg,"%05o",cmc_w0); cmc_form->textBox91->Text = msg;
 					sprintf(msg,"%05o",cmc_w1); cmc_form->textBox93->Text = msg;
 					break;
@@ -4015,46 +4028,46 @@ void Form1::parse_cmc(){
 		// 8NN,S22LOC,FLAGWORD 10-11,RLSx (LIST 4)
 		case 74:
 			switch(cmc_lock_type){
-				case 1:
+				case TLM_CMC_COAST_ALIGN:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox96->Text = msg;
 					cmc_form->textBox143->Text = "XXXXX-XXXXX";
 					break;
-				case 3:
-				case 4:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
+				case TLM_CMC_POWERED:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox143->Text = msg;
 					cmc_form->textBox96->Text = "XXXXX-XXXXX";
 					break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					break;
 			}
 			break;
 		case 75:
 			switch(cmc_lock_type){
-				case 1:
+				case TLM_CMC_COAST_ALIGN:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox94->Text = msg;
 					cmc_form->textBox142->Text = "XXXXX-XXXXX";
 					break;
-				case 3:
-				case 4:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
+				case TLM_CMC_POWERED:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox142->Text = msg;
 					cmc_form->textBox94->Text = "XXXXX-XXXXX";
 					break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					break;
 			}
 			break;
 		case 76:
 			switch(cmc_lock_type){
-				case 1:
+				case TLM_CMC_COAST_ALIGN:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox95->Text = msg;
 					cmc_form->textBox141->Text = "XXXXX-XXXXX";
 					break;
-				case 3:
-				case 4:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
+				case TLM_CMC_POWERED:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox141->Text = msg;
 					cmc_form->textBox95->Text = "XXXXX-XXXXX";
 					break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					break;
 			}
 			break;
@@ -4063,16 +4076,16 @@ void Form1::parse_cmc(){
 		// RLSy           (LIST 4)
 		case 77: 
 			switch(cmc_lock_type){
-				case 1:
-				case 4:
+				case TLM_CMC_COAST_ALIGN:
+				case TLM_CMC_POWERED:
 					sprintf(msg,"%05o",cmc_w0); cmc_form->textBox87->Text = msg;
 					sprintf(msg,"%05o",cmc_w1); cmc_form->textBox100->Text = msg;
 					cmc_form->textBox146->Text = "XXXXX-XXXXX";
 					break;
-				case 3:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox146->Text = msg; break;
 					break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					break;
 			}
 			break;
@@ -4081,16 +4094,16 @@ void Form1::parse_cmc(){
 		// RLSz      (LIST 4)
 		case 78:
 			switch(cmc_lock_type){
-				case 1:
-				case 4:
+				case TLM_CMC_COAST_ALIGN:
+				case TLM_CMC_POWERED:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox102->Text = msg;
 					cmc_form->textBox145->Text = "XXXXX-XXXXX";
 					break;
-				case 3:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox145->Text = msg;
 					cmc_form->textBox102->Text = "XXXXX-XXXXX";
 					break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					break;
 			}
 			break;
@@ -4100,19 +4113,19 @@ void Form1::parse_cmc(){
 		// SPARE               (LIST 4)
 		case 79:
 			switch(cmc_lock_type){
-				case 1:
+				case TLM_CMC_COAST_ALIGN:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox101->Text = msg;
 					cmc_form->textBox144->Text = "XXXXX-XXXXX";
 					break;
-				case 3:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox144->Text = msg;
 					cmc_form->textBox101->Text = "XXXXX-XXXXX";
 					break;
-				case 4:
+				case TLM_CMC_POWERED:
 					cmc_form->textBox101->Text = "XXXXX-XXXXX";
 					cmc_form->textBox144->Text = "XXXXX-XXXXX";
 					break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					break;
 			}
 			break;
@@ -4120,11 +4133,11 @@ void Form1::parse_cmc(){
 		/* ****************** LIST 5 UPBUF DUPE ENDS **************** */
 		case 80: 
 			switch(cmc_lock_type){
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					break;
-				case 1:
-				case 3:
-				case 4:
+				case TLM_CMC_COAST_ALIGN:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
+				case TLM_CMC_POWERED:
 					sprintf(msg,"%05o",cmc_w0); cmc_form->textBox103->Text = msg;
 					sprintf(msg,"%05o",cmc_w1); cmc_form->textBox106->Text = msg;
 					break;
@@ -4144,12 +4157,12 @@ void Form1::parse_cmc(){
 		// DUPE OF ROLLTM and ROLLC (LIST 5)
 		case 83: 
 			switch(cmc_lock_type){
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					sprintf(msg,"%05o",cmc_w0); cmc_form->textBox165->Text = msg;
 					break;
-				case 1:
-				case 3:
-				case 4:
+				case TLM_CMC_COAST_ALIGN:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
+				case TLM_CMC_POWERED:
 					sprintf(msg,"%05o",cmc_w0); cmc_form->textBox111->Text = msg;
 					sprintf(msg,"%05o",cmc_w1); cmc_form->textBox110->Text = msg;
 					// cmc_form->textBox165->Text = "XXXXX-XXXXX"; // Gets blanked earlier.
@@ -4209,16 +4222,16 @@ void Form1::parse_cmc(){
 		// RSBBQ,CADRFLSH,FAILREG,FLAGWORD 10-11,GAMMAEI,RTGO (LIST 5)
 		case 95:
 			switch(cmc_lock_type){
-				case 1:
+				case TLM_CMC_COAST_ALIGN:
 					cmc_form->textBox147->Text = "XXXXX-XXXXX";
 					break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox86->Text = msg;
 					break;
-				case 3:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox147->Text = msg;
 					break;
-				case 4:
+				case TLM_CMC_POWERED:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox48->Text = msg;
 					cmc_form->textBox147->Text = "XXXXX-XXXXX";
 					break;
@@ -4226,17 +4239,17 @@ void Form1::parse_cmc(){
 			break;
 		case 96:
 			switch(cmc_lock_type){
-				case 1:
+				case TLM_CMC_COAST_ALIGN:
 					cmc_form->textBox148->Text = "XXXXX-XXXXX";
 					break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					sprintf(msg,"%05o",cmc_w0); cmc_form->textBox90->Text = msg;
 					sprintf(msg,"%05o",cmc_w1); cmc_form->textBox89->Text = msg;
 					break;
-				case 3:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox148->Text = msg;
 					break;
-				case 4:
+				case TLM_CMC_POWERED:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox47->Text = msg;
 					cmc_form->textBox148->Text = "XXXXX-XXXXX";
 					break;
@@ -4244,17 +4257,17 @@ void Form1::parse_cmc(){
 			break;
 		case 97:
 			switch(cmc_lock_type){
-				case 1:
+				case TLM_CMC_COAST_ALIGN:
 					cmc_form->textBox149->Text = "XXXXX-XXXXX";
 					break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					sprintf(msg,"%05o",cmc_w0); cmc_form->textBox88->Text = msg;
 					sprintf(msg,"%05o",cmc_w1); cmc_form->textBox99->Text = msg;
 					break;
-				case 3:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox149->Text = msg;
 					break;
-				case 4:
+				case TLM_CMC_POWERED:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox46->Text = msg;
 					cmc_form->textBox149->Text = "XXXXX-XXXXX";
 					break;
@@ -4262,50 +4275,55 @@ void Form1::parse_cmc(){
 			break;
 		case 98:
 			switch(cmc_lock_type){
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					sprintf(msg,"%05o",cmc_w0); cmc_form->textBox98->Text = msg;
 					sprintf(msg,"%05o",cmc_w1); cmc_form->textBox97->Text = msg;
 					break;
-				case 1:
-				case 4:
+				case TLM_CMC_COAST_ALIGN:
+				case TLM_CMC_POWERED:
 					cmc_form->textBox150->Text = "XXXXX-XXXXX";
 					break;
-				case 3:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox150->Text = msg;
 					break;
 			}
 			break;
 		case 99:
 			switch(cmc_lock_type){
-				case 1:
-				case 4:
+				case TLM_CMC_COAST_ALIGN:
+				case TLM_CMC_POWERED:
 					cmc_form->textBox151->Text = "XXXXX-XXXXX";
 					break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					sprintf(msg,"%05o",cmc_w0); cmc_form->textBox87->Text = msg;
 					sprintf(msg,"%05o",cmc_w1); cmc_form->textBox100->Text = msg;
 					break;
-				case 3:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
 					sprintf(msg,"%05o-%05o",cmc_w0,cmc_w1); cmc_form->textBox151->Text = msg;
 					break;
 			}
 			break;
 		case 100:
 			switch(cmc_lock_type){
-				case 1:
-				case 4:
+				case TLM_CMC_COAST_ALIGN:
+				case TLM_CMC_POWERED:
 					break;
-				case 3:
+				case TLM_CMC_RENDEZVOUS_PRETHRUST:
 					sprintf(msg,"%05o",cmc_w0); cmc_form->textBox87->Text = msg;
 					sprintf(msg,"%05o",cmc_w1); cmc_form->textBox100->Text = msg;
 					break;
-				case 2:
+				case TLM_CMC_ENTRY_UPDATE:
 					sprintf(msg,"%05o",cmc_w0); cmc_form->textBox151->Text = msg;
 					sprintf(msg,"%05o",cmc_w1); cmc_form->textBox179->Text = msg;
 					break;
 			}
 			break;
 	}
+}
+
+void Form1::ProcessEMEMDump()
+{
+	//TBD
 }
 
 // Translate bits into DSKY display character
@@ -4469,6 +4487,7 @@ void Form1::parse_lbr(unsigned char data, int bytect)
 
 		case 8:
 		case 28: // CMC DATA WORD
+			cmc_word_order_code = ((data & 0200) != 0);
 			cmc_w0 = data&0177;
 			cmc_w0 <<= 8;
 			break;
